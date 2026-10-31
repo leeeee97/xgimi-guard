@@ -32,7 +32,7 @@ public final class AdbShellClient implements AutoCloseable {
     private int remoteId = -1;
     private int maxData = MAX_PAYLOAD;
 
-    private AdbShellClient(Socket socket) {
+    private AdbShellClient(Socket socket) throws IOException {
         this.socket = socket;
         this.in = new DataInputStream(socket.getInputStream());
         this.out = new DataOutputStream(socket.getOutputStream());
