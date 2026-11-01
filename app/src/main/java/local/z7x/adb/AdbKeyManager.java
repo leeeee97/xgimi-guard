@@ -7,6 +7,7 @@ import java.io.DataInputStream;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
+import java.io.IOException;
 import java.math.BigInteger;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
@@ -85,34 +86,42 @@ public final class AdbKeyManager {
      * would hash the token a second time, so we build the DigestInfo ourselves
      * and use raw PKCS#1 v1.5 encryption.
      */
-    public byte[] signToken(byte[] token) throws Exception {
-        byte[] digestInfo = new byte[SHA1_DIGEST_INFO_PREFIX.length + token.length];
-        System.arraycopy(SHA1_DIGEST_INFO_PREFIX, 0, digestInfo, 0, SHA1_DIGEST_INFO_PREFIX.length);
-        System.arraycopy(token, 0, digestInfo, SHA1_DIGEST_INFO_PREFIX.length, token.length);
-        Cipher cipher = Cipher.getInstance("RSA/ECB/PKCS1Padding");
-        cipher.init(Cipher.ENCRYPT_MODE, pair.getPrivate());
-        return cipher.doFinal(digestInfo);
+    public byte[] signToken(byte[] token) throws IOException {
+        try {
+            byte[] digestInfo = new byte[SHA1_DIGEST_INFO_PREFIX.length + token.length];
+            System.arraycopy(SHA1_DIGEST_INFO_PREFIX, 0, digestInfo, 0, SHA1_DIGEST_INFO_PREFIX.length);
+            System.arraycopy(token, 0, digestInfo, SHA1_DIGEST_INFO_PREFIX.length, token.length);
+            Cipher cipher = Cipher.getInstance("RSA/ECB/PKCS1Padding");
+            cipher.init(Cipher.ENCRYPT_MODE, pair.getPrivate());
+            return cipher.doFinal(digestInfo);
+        } catch (Exception e) {
+            throw new IOException("签名失败: " + e, e);
+        }
     }
 
     /** Wire payload for A_AUTH RSAPUBLICKEY: base64(android_pubkey) + " name\0". */
-    public byte[] publicKeyPayload() throws Exception {
-        RSAPublicKeySpec spec = KeyFactory.getInstance("RSA")
-                .getKeySpec(pair.getPublic(), RSAPublicKeySpec.class);
-        BigInteger n = spec.getModulus();
-        BigInteger e = spec.getPublicExponent();
-        BigInteger two32 = BigInteger.ONE.shiftLeft(32);
-        BigInteger n0inv = n.modInverse(two32).negate().mod(two32);
-        BigInteger rr = BigInteger.valueOf(2).pow(4096).mod(n);
+    public byte[] publicKeyPayload() throws IOException {
+        try {
+            RSAPublicKeySpec spec = KeyFactory.getInstance("RSA")
+                    .getKeySpec(pair.getPublic(), RSAPublicKeySpec.class);
+            BigInteger n = spec.getModulus();
+            BigInteger e = spec.getPublicExponent();
+            BigInteger two32 = BigInteger.ONE.shiftLeft(32);
+            BigInteger n0inv = n.modInverse(two32).negate().mod(two32);
+            BigInteger rr = BigInteger.valueOf(2).pow(4096).mod(n);
 
-        ByteBuffer buf = ByteBuffer.allocate(4 + 4 + 256 + 256 + 4).order(ByteOrder.LITTLE_ENDIAN);
-        buf.putInt(64);                 // modulus size in 32-bit words (2048/32)
-        buf.putInt(n0inv.intValue());   // bit pattern is what matters, negatives are fine
-        putLe(buf, n, 256);
-        putLe(buf, rr, 256);
-        buf.putInt(e.intValue());
-        byte[] struct = buf.array();
-        String b64 = Base64.encodeToString(struct, Base64.NO_WRAP);
-        return (b64 + " " + KEY_NAME + "\0").getBytes("UTF-8");
+            ByteBuffer buf = ByteBuffer.allocate(4 + 4 + 256 + 256 + 4).order(ByteOrder.LITTLE_ENDIAN);
+            buf.putInt(64);                 // modulus size in 32-bit words (2048/32)
+            buf.putInt(n0inv.intValue());   // bit pattern is what matters, negatives are fine
+            putLe(buf, n, 256);
+            putLe(buf, rr, 256);
+            buf.putInt(e.intValue());
+            byte[] struct = buf.array();
+            String b64 = Base64.encodeToString(struct, Base64.NO_WRAP);
+            return (b64 + " " + KEY_NAME + "\0").getBytes("UTF-8");
+        } catch (Exception e) {
+            throw new IOException("公钥编码失败: " + e, e);
+        }
     }
 
     /** Appends the value as a zero-padded little-endian byte array of exactly len bytes. */
