@@ -102,7 +102,7 @@ public final class AdbKeyManager {
         BigInteger e = spec.getPublicExponent();
         BigInteger two32 = BigInteger.ONE.shiftLeft(32);
         BigInteger n0inv = n.modInverse(two32).negate().mod(two32);
-        BigInteger rr = BigInteger.TWO.pow(4096).mod(n);
+        BigInteger rr = BigInteger.valueOf(2).pow(4096).mod(n);
 
         ByteBuffer buf = ByteBuffer.allocate(4 + 4 + 256 + 256 + 4).order(ByteOrder.LITTLE_ENDIAN);
         buf.putInt(64);                 // modulus size in 32-bit words (2048/32)
