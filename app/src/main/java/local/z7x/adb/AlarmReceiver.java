@@ -20,7 +20,7 @@ public final class AlarmReceiver extends BroadcastReceiver {
         final Context app = context.getApplicationContext();
         new Thread(() -> {
             try {
-                GuardController.Result r = GuardController.ensure();
+                GuardController.Result r = GuardController.ensure(app);
                 AndroidLog.w("guard", "periodic: " + r.detail);
             } catch (Throwable t) {
                 AndroidLog.w("guard", "periodic failed: " + t);

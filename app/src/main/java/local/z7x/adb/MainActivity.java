@@ -175,7 +175,7 @@ public final class MainActivity extends Activity {
         new Thread(() -> {
             String result = AdbController.enable(); AdbController.save(this,result);
             // Chain the Aerial guard repair onto every ADB enable cycle.
-            GuardController.Result guard = GuardController.ensure();
+            GuardController.Result guard = GuardController.ensure(this);
             AlarmReceiver.schedule(this);
             runOnUiThread(() -> {
                 if (isDestroyed()) return;

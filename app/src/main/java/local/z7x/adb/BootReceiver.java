@@ -13,7 +13,7 @@ public final class BootReceiver extends BroadcastReceiver {
                 catch (Throwable t) { AndroidLog.w("guard", "boot: adb enable failed: " + t); }
                 // 2) Repair the Aerial guard through the device's own adbd.
                 try {
-                    GuardController.Result r = GuardController.ensure();
+                    GuardController.Result r = GuardController.ensure(app);
                     AndroidLog.w("guard", "boot: " + r.detail);
                 } catch (Throwable t) { AndroidLog.w("guard", "boot: guard failed: " + t); }
                 // 3) Keep the periodic safety net armed.

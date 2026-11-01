@@ -23,8 +23,8 @@ public final class GuardController {
     }
 
     /** Checks the current state and repairs it when Aerial's guard is missing. */
-    public static Result ensure() {
-        try (AdbShellClient adb = AdbShellClient.connect(5555)) {
+    public static Result ensure(android.content.Context context) {
+        try (AdbShellClient adb = AdbShellClient.connect(5555, AdbKeyManager.load(context))) {
             String current = adb.shell(
                     "settings get secure enabled_accessibility_services").trim();
             if ("null".equals(current) || "none".equals(current)) current = "";
@@ -61,8 +61,10 @@ public final class GuardController {
             return new Result(true, "已恢复 Aerial 守护；当前启用: " + verify);
         } catch (IOException e) {
             String msg = e.getMessage();
-            if ("AUTH_REQUIRED".equals(msg) || (msg != null && msg.contains("AUTH_REQUIRED"))) {
-                return new Result(false, "adbd 需要授权：请在投影仪屏幕上出现的调试授权弹窗中勾选「始终允许」后重试");
+            if (msg != null && (msg.contains("等待授权") || msg.contains("AUTH_REQUIRED"))) {
+                return new Result(false, msg
+                        + "\n投影仪屏幕出现调试授权弹窗时，请用遥控器勾选「始终允许」并确认；"
+                        + "确认后按「重新开启并检查」重试（密钥会被记住，之后不再弹窗）");
             }
             return new Result(false, "本机 ADB 连接失败: " + (msg == null ? e.toString() : msg));
         }

@@ -10,20 +10,32 @@ import java.nio.charset.StandardCharsets;
 
 /**
  * Minimal ADB-protocol client speaking to the device's own adbd on 127.0.0.1:5555.
- * Implements CNXN / OPEN / OKAY / WRTE / CLSE. A_AUTH is intentionally not
- * implemented: XGIMI firmware reports ro.adb.secure=0, and if the device ever
- * asks for authentication the caller surfaces a hint to approve the debug
- * dialog once on screen (the approval is remembered afterwards).
+ * Implements CNXN / AUTH (TOKEN / SIGNATURE / RSAPUBLICKEY) / OPEN / OKAY / WRTE / CLSE.
+ *
+ * Auth flow (mirrors adb host behaviour and python-adb):
+ *   1. CNXN — a secure adbd answers A_AUTH TOKEN with a 20-byte token.
+ *   2. Reply A_AUTH SIGNATURE with an RSA SHA-1 PKCS#1 signature over the token.
+ *   3. If the device still answers A_AUTH TOKEN, our key is not on its approved
+ *      list yet: send A_AUTH RSAPUBLICKEY (android_pubkey format, base64 +
+ *      " name\0"). adbd then pops the debug-approval dialog on screen.
+ *   4. After the user approves with the remote, adbd answers CNXN and remembers
+ *      the key, so later connections skip step 3 entirely.
  */
 public final class AdbShellClient implements AutoCloseable {
     private static final int A_CNXN = 0x4e584e43;
-    private static final int A_AUTH = 0x4e545541;
+    private static final int A_AUTH = 0x48545541;   // 'AUTH' little-endian
     private static final int A_OPEN = 0x4e45504f;
     private static final int A_OKAY = 0x59414b4f;
     private static final int A_CLSE = 0x45534c43;
     private static final int A_WRTE = 0x45545257;
-    private static final int PROTOCOL_VERSION = 0x01000001;
+    private static final int AUTH_TOKEN = 1;
+    private static final int AUTH_SIGNATURE = 2;
+    private static final int AUTH_RSAPUBLICKEY = 3;
+    private static final int PROTOCOL_VERSION = 0x01000000;
     private static final int MAX_PAYLOAD = 4096;
+    /** How long to wait for the on-screen approval dialog (remote control). */
+    private static final int AUTH_DIALOG_TIMEOUT_MS = 120000;
+    private static final int MAX_PUBKEY_ROUNDS = 2;
 
     private final Socket socket;
     private final DataInputStream in;
@@ -38,24 +50,48 @@ public final class AdbShellClient implements AutoCloseable {
         this.out = new DataOutputStream(socket.getOutputStream());
     }
 
-    /** Connects to adbd on localhost and performs the CNXN handshake. */
-    public static AdbShellClient connect(int port) throws IOException {
+    /**
+     * Connects to adbd and performs CNXN, authenticating with the given key
+     * manager when the device requires it. Blocks for up to
+     * {@link #AUTH_DIALOG_TIMEOUT_MS} when the on-screen approval dialog is
+     * pending.
+     */
+    public static AdbShellClient connect(int port, AdbKeyManager keys) throws IOException {
         Socket socket = new Socket();
         socket.connect(new InetSocketAddress("127.0.0.1", port), 5000);
         socket.setSoTimeout(15000);
         AdbShellClient client = new AdbShellClient(socket);
-        client.write(A_CNXN, PROTOCOL_VERSION, MAX_PAYLOAD, new byte[0]);
-        Message m = client.read();
-        if (m.cmd == A_AUTH) {
+        try {
+            client.write(A_CNXN, PROTOCOL_VERSION, MAX_PAYLOAD,
+                    "host::xgimi-guard\0".getBytes(StandardCharsets.UTF_8));
+            Message m = client.read();
+            int pubkeyRounds = 0;
+            while (m.cmd == A_AUTH) {
+                if (m.arg0 != AUTH_TOKEN)
+                    throw new IOException("未知 AUTH 类型: arg0=" + m.arg0);
+                if (keys == null)
+                    throw new IOException("AUTH_REQUIRED: 设备要求认证但无可用密钥");
+                client.write(A_AUTH, AUTH_SIGNATURE, 0, keys.signToken(m.data));
+                m = client.read();
+                if (m.cmd == A_AUTH && m.arg0 == AUTH_TOKEN) {
+                    // Signature not on the approved list: publish the public key.
+                    // adbd shows the debug dialog; approval is remembered afterwards.
+                    if (++pubkeyRounds > MAX_PUBKEY_ROUNDS)
+                        throw new IOException("等待授权超时：请在投影仪屏幕弹窗中勾选「始终允许」后重试");
+                    socket.setSoTimeout(AUTH_DIALOG_TIMEOUT_MS);
+                    client.write(A_AUTH, AUTH_RSAPUBLICKEY, 0, keys.publicKeyPayload());
+                    m = client.read();
+                    socket.setSoTimeout(15000);
+                }
+            }
+            if (m.cmd != A_CNXN)
+                throw new IOException("握手失败: 0x" + Integer.toHexString(m.cmd));
+            client.maxData = Math.max(256, m.arg1);
+            return client;
+        } catch (IOException e) {
             client.close();
-            throw new IOException("AUTH_REQUIRED");
+            throw e;
         }
-        if (m.cmd != A_CNXN) {
-            client.close();
-            throw new IOException("握手失败: 0x" + Integer.toHexString(m.cmd));
-        }
-        client.maxData = Math.max(256, m.arg1);
-        return client;
     }
 
     /** Runs "shell:<command>" and returns the combined stdout/stderr text. */
@@ -75,7 +111,7 @@ public final class AdbShellClient implements AutoCloseable {
             } else if (m.cmd == A_CLSE) {
                 break;
             } else if (m.cmd == A_AUTH) {
-                throw new IOException("AUTH_REQUIRED");
+                throw new IOException("AUTH_REQUIRED: shell 会话中收到认证请求");
             }
         }
         remoteId = -1;
